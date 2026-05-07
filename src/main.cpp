@@ -20,9 +20,10 @@ const char* ap_password = "changeme";   // 8-63 chars
 #define LED_PIN    5    // NeoPixel data line
 #define SERVO_PIN  17   // Mouth servo signal
 
-// LED chain: left eye = 0–6, right eye = 7–13, candle = 14
-#define NUM_EYE_LEDS   7
-#define NUM_LEDS      15   // 7 + 7 + 1
+// LED chain: left eye = 0–6, right eye = 7–13, candle = 14–20
+#define NUM_EYE_LEDS    7
+#define NUM_CANDLE_LEDS 7
+#define NUM_LEDS       21   // 7 + 7 + 7
 
 // ---------------------------------------------------------------------------
 // Servo positions (degrees) — adjust after physical install
@@ -33,8 +34,10 @@ const char* ap_password = "changeme";   // 8-63 chars
 // ---------------------------------------------------------------------------
 // Bite timing — adjust to taste
 // ---------------------------------------------------------------------------
-#define BITE_OPEN_MS    150   // how long mouth stays open during snap
-#define BITE_CLOSE_MS   120   // pause after closing before restoring eye color
+#define BITE_OPEN_MS          150   // how long mouth stays open during snap
+#define BITE_CLOSE_MS         120   // pause after closing before flicker-out begins
+#define BITE_FLICKER_HALF_MS   60   // duration of each on/off half-cycle during eye flicker
+#define BITE_FLICKER_COUNT      3   // number of half-cycle transitions (odd = ends on target color)
 
 // ---------------------------------------------------------------------------
 // Eye brightness (0–255)
@@ -66,9 +69,10 @@ bool eyesRed = false;
 // ---------------------------------------------------------------------------
 // Bite state machine
 // ---------------------------------------------------------------------------
-enum BiteState { BITE_IDLE, BITE_OPENING, BITE_CLOSING };
-BiteState    biteState  = BITE_IDLE;
-unsigned long biteStepMs = 0;
+enum BiteState { BITE_IDLE, BITE_FLICKER_IN, BITE_OPENING, BITE_CLOSING, BITE_FLICKER_OUT };
+BiteState     biteState   = BITE_IDLE;
+unsigned long biteStepMs  = 0;
+int           flickerStep = 0;
 
 // ---------------------------------------------------------------------------
 // Candle state
@@ -109,12 +113,15 @@ void applyEyes() {
 
 // ---------------------------------------------------------------------------
 // Candle flicker — call every loop iteration
+// Each pixel gets an independent random flame color so the ring looks organic.
 // ---------------------------------------------------------------------------
 void updateCandle() {
   if (!candleOn) return;
   unsigned long now = millis();
   if (now >= candleNextMs) {
-    candle[0] = CRGB(random(200, 256), random(50, 160), 0);
+    for (int i = 0; i < NUM_CANDLE_LEDS; i++) {
+      candle[i] = CRGB(random(180, 256), random(20, 140), 0);
+    }
     candleNextMs = now + random(CANDLE_FLICKER_MIN_MS, CANDLE_FLICKER_MAX_MS);
     FastLED.show();
   }
@@ -122,31 +129,74 @@ void updateCandle() {
 
 // ---------------------------------------------------------------------------
 // Bite state machine — call every loop iteration
+//
+// Full sequence:
+//   FLICKER_IN  → eyes alternate normal/red BITE_FLICKER_COUNT times → ends red
+//   OPENING     → servo opens, eyes hold red for BITE_OPEN_MS
+//   CLOSING     → servo closes, hold for BITE_CLOSE_MS
+//   FLICKER_OUT → eyes alternate red/normal BITE_FLICKER_COUNT times → ends normal
 // ---------------------------------------------------------------------------
 void updateBite() {
   if (biteState == BITE_IDLE) return;
   unsigned long now = millis();
-  if (biteState == BITE_OPENING && now - biteStepMs >= BITE_OPEN_MS) {
-    mouthServo.write(SERVO_CLOSED);
-    biteState  = BITE_CLOSING;
-    biteStepMs = now;
-  } else if (biteState == BITE_CLOSING && now - biteStepMs >= BITE_CLOSE_MS) {
-    eyesRed = false;
-    applyEyes();
-    FastLED.show();
-    biteState = BITE_IDLE;
-    strncpy(lastAction, "bite done", sizeof(lastAction) - 1);
+
+  if (biteState == BITE_FLICKER_IN) {
+    if (now - biteStepMs >= BITE_FLICKER_HALF_MS) {
+      flickerStep++;
+      if (flickerStep >= BITE_FLICKER_COUNT) {
+        eyesRed = true;
+        applyEyes();
+        mouthServo.write(SERVO_OPEN);
+        FastLED.show();
+        biteState  = BITE_OPENING;
+        biteStepMs = now;
+      } else {
+        eyesRed = !eyesRed;
+        applyEyes();
+        FastLED.show();
+        biteStepMs = now;
+      }
+    }
+
+  } else if (biteState == BITE_OPENING) {
+    if (now - biteStepMs >= BITE_OPEN_MS) {
+      mouthServo.write(SERVO_CLOSED);
+      biteState  = BITE_CLOSING;
+      biteStepMs = now;
+    }
+
+  } else if (biteState == BITE_CLOSING) {
+    if (now - biteStepMs >= BITE_CLOSE_MS) {
+      flickerStep = 0;
+      biteState   = BITE_FLICKER_OUT;
+      biteStepMs  = now;
+    }
+
+  } else if (biteState == BITE_FLICKER_OUT) {
+    if (now - biteStepMs >= BITE_FLICKER_HALF_MS) {
+      flickerStep++;
+      if (flickerStep >= BITE_FLICKER_COUNT) {
+        eyesRed = false;
+        applyEyes();
+        FastLED.show();
+        biteState = BITE_IDLE;
+        strncpy(lastAction, "bite done", sizeof(lastAction) - 1);
+      } else {
+        eyesRed = !eyesRed;
+        applyEyes();
+        FastLED.show();
+        biteStepMs = now;
+      }
+    }
   }
 }
 
 void triggerBite() {
   if (biteState != BITE_IDLE) return;
-  eyesRed = true;
-  applyEyes();
-  mouthServo.write(SERVO_OPEN);
-  FastLED.show();
-  biteState  = BITE_OPENING;
-  biteStepMs = millis();
+  eyesRed     = false;   // start from normal color; flicker_in will toggle toward red
+  flickerStep = 0;
+  biteState   = BITE_FLICKER_IN;
+  biteStepMs  = millis();
   strncpy(lastAction, "biting!", sizeof(lastAction) - 1);
 }
 
@@ -204,7 +254,7 @@ void dispatchAction(const char* path) {
   }
   if (strcmp(path, "candle") == 0) {
     candleOn = !candleOn;
-    if (!candleOn) { candle[0] = CRGB::Black; FastLED.show(); }
+    if (!candleOn) { fill_solid(candle, NUM_CANDLE_LEDS, CRGB::Black); FastLED.show(); }
     strncpy(lastAction, candleOn ? "candle on" : "candle off", sizeof(lastAction) - 1);
     return;
   }
@@ -323,7 +373,7 @@ void setup() {
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
   FastLED.clear();
   applyEyes();
-  candle[0] = CRGB::Black;
+  fill_solid(candle, NUM_CANDLE_LEDS, CRGB::Black);
   FastLED.show();
 
   mouthServo.attach(SERVO_PIN);
