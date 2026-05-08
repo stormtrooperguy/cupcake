@@ -17,7 +17,7 @@ const char* ap_password = "changeme";   // 8-63 chars
 // ---------------------------------------------------------------------------
 // Hardware pins — adjust after physical install
 // ---------------------------------------------------------------------------
-#define LED_PIN    5    // NeoPixel data line
+#define LED_PIN   13    // NeoPixel data line
 #define SERVO_PIN  17   // Mouth servo signal
 
 // LED chain: left eye = 0–6, right eye = 7–13, candle = 14–20

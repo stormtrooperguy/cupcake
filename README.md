@@ -15,13 +15,13 @@ ESP32 firmware for an animatronic cupcake with a snapping mouth servo, two NeoPi
 
 | Signal | ESP32 GPIO | Notes |
 |---|---|---|
-| NeoPixel data | 5 | Via 300–500 Ω series resistor; chain order: left eye (0–6), right eye (7–13), candle (14–20) |
+| NeoPixel data | 13 | Via 300–500 Ω series resistor; chain order: left eye (0–6), right eye (7–13), candle (14–20) |
 | Servo signal | 17 | Signal wire only |
 
 Daisy-chain the NeoPixels in this order:
 
 ```
-ESP32 GPIO 5 → left eye ring (IN)
+ESP32 GPIO 13 → left eye ring (IN)
                left eye ring (OUT) → right eye ring (IN)
                                      right eye ring (OUT) → candle ring (IN)
 ```
@@ -50,7 +50,7 @@ All tunable values are `#define` constants at the top of [`src/main.cpp`](src/ma
 
 ### Pins
 ```cpp
-#define LED_PIN    5
+#define LED_PIN   13
 #define SERVO_PIN  17
 ```
 
