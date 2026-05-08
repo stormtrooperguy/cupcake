@@ -34,7 +34,7 @@ const char* ap_password = "changeme";   // 8-63 chars
 // ---------------------------------------------------------------------------
 // Bite timing — adjust to taste
 // ---------------------------------------------------------------------------
-#define BITE_OPEN_MS          150   // how long mouth stays open during snap
+#define BITE_OPEN_MS          400   // how long mouth stays open during snap
 #define BITE_CLOSE_MS         120   // pause after closing before flicker-out begins
 #define BITE_FLICKER_HALF_MS   60   // duration of each on/off half-cycle during eye flicker
 #define BITE_FLICKER_COUNT      3   // number of half-cycle transitions (odd = ends on target color)
@@ -42,7 +42,7 @@ const char* ap_password = "changeme";   // 8-63 chars
 // ---------------------------------------------------------------------------
 // Eye brightness (0–255)
 // ---------------------------------------------------------------------------
-#define EYE_BRIGHTNESS   80
+#define EYE_BRIGHTNESS   50
 
 // ---------------------------------------------------------------------------
 // Candle flicker timing
@@ -62,8 +62,8 @@ Servo mouthServo;
 // ---------------------------------------------------------------------------
 // Eye state
 // ---------------------------------------------------------------------------
-CRGB eyeNormalColor = CRGB(255, 180, 100);   // warm white default
-char currentEyePath[32] = "eye_warm_white";
+CRGB eyeNormalColor = CRGB::Yellow;
+char currentEyePath[32] = "eye_yellow";
 bool eyesRed = false;
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ int           flickerStep = 0;
 // ---------------------------------------------------------------------------
 // Candle state
 // ---------------------------------------------------------------------------
-bool          candleOn      = false;
+bool          candleOn      = true;
 unsigned long candleNextMs  = 0;
 
 // ---------------------------------------------------------------------------
@@ -238,7 +238,7 @@ void sendNotFound(WiFiClient &client) {
 // ---------------------------------------------------------------------------
 struct EyeOption { const char* path; CRGB color; };
 static const EyeOption eyeOptions[] = {
-  {"eye_warm_white", CRGB(255, 180, 100)},
+  {"eye_yellow",     CRGB::Yellow},
   {"eye_red",        CRGB::Red},
   {"eye_blue",       CRGB::Blue},
   {"eye_green",      CRGB::Green},
@@ -250,6 +250,14 @@ static const int numEyeOptions = sizeof(eyeOptions) / sizeof(eyeOptions[0]);
 void dispatchAction(const char* path) {
   if (strcmp(path, "bite") == 0) {
     triggerBite();
+    return;
+  }
+  if (strcmp(path, "mouth_open") == 0) {
+    if (biteState == BITE_IDLE) { mouthServo.write(SERVO_OPEN); strncpy(lastAction, "mouth open", sizeof(lastAction) - 1); }
+    return;
+  }
+  if (strcmp(path, "mouth_close") == 0) {
+    if (biteState == BITE_IDLE) { mouthServo.write(SERVO_CLOSED); strncpy(lastAction, "mouth closed", sizeof(lastAction) - 1); }
     return;
   }
   if (strcmp(path, "candle") == 0) {
@@ -301,6 +309,7 @@ void sendPageHTML(WiFiClient &client) {
     ".btn.on { outline:3px solid #fff; outline-offset:-3px; filter:brightness(1.3); }"
     ".btn-bite { background:#c0392b; font-size:22px; padding:22px; grid-column:1/-1; }"
     ".btn-candle { background:#d35400; }"
+    ".btn-mouth { background:#5d6d7e; }"
     ".btn-eye { background:#2471a3; }"
     ".status-bar { position:fixed; bottom:0; left:0; right:0; background:#2a2a2a;"
     "border-top:2px solid #444; padding:8px 11px; box-shadow:0 -2px 8px rgba(0,0,0,.5); }"
@@ -321,10 +330,18 @@ void sendPageHTML(WiFiClient &client) {
     "</div>"
   );
 
+  // Calibration section
+  client.print(
+    "<h2>Calibration</h2><div class=\"grid\">"
+    "<button class=\"btn btn-mouth\" data-path=\"mouth_open\" onclick=\"t('mouth_open')\">mouth open</button>"
+    "<button class=\"btn btn-mouth\" data-path=\"mouth_close\" onclick=\"t('mouth_close')\">mouth close</button>"
+    "</div>"
+  );
+
   // Eye color section
   client.print(
     "<h2>Eye Color</h2><div class=\"grid\">"
-    "<button class=\"btn btn-eye\" data-path=\"eye_warm_white\" onclick=\"t('eye_warm_white')\">warm white</button>"
+    "<button class=\"btn btn-eye\" data-path=\"eye_yellow\" onclick=\"t('eye_yellow')\">yellow</button>"
     "<button class=\"btn btn-eye\" data-path=\"eye_red\" onclick=\"t('eye_red')\">red</button>"
     "<button class=\"btn btn-eye\" data-path=\"eye_blue\" onclick=\"t('eye_blue')\">blue</button>"
     "<button class=\"btn btn-eye\" data-path=\"eye_green\" onclick=\"t('eye_green')\">green</button>"
