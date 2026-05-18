@@ -5,6 +5,8 @@
 */
 
 #include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 #include <FastLED.h>
 #include <ESP32Servo.h>
 
@@ -63,7 +65,7 @@ Servo mouthServo;
 // Eye state
 // ---------------------------------------------------------------------------
 CRGB eyeNormalColor = CRGB::Yellow;
-char currentEyePath[32] = "eye_yellow";
+const char* currentEyePath = "eye_yellow";
 bool eyesRed = false;
 
 // ---------------------------------------------------------------------------
@@ -81,18 +83,33 @@ bool          candleOn      = true;
 unsigned long candleNextMs  = 0;
 
 // ---------------------------------------------------------------------------
-// Web server
+// Action queue: AsyncWebServer handlers enqueue requested paths; loop() drains
+// the queue and runs the actual dispatch. Keeps every hardware operation
+// (servo, FastLED) single-threaded inside loop() — no concurrent access with
+// the async HTTP task.
 // ---------------------------------------------------------------------------
-WiFiServer server(80);
-#define MAX_HEADER_SIZE 512
-#define MAX_PATH_SIZE    32
-char          header[MAX_HEADER_SIZE];
-int           headerLen   = 0;
-unsigned long currentTime  = 0;
-unsigned long previousTime = 0;
-const long    timeoutTime  = 1000;
+#define ACTION_PATH_MAX  32
+#define ACTION_QUEUE_DEPTH 8
+struct ActionMsg { char path[ACTION_PATH_MAX]; };
+QueueHandle_t actionQueue = NULL;
 
-char lastAction[48] = "ready";
+// ---------------------------------------------------------------------------
+// Async web server + SSE
+// ---------------------------------------------------------------------------
+AsyncWebServer server(80);
+AsyncEventSource events("/events");
+
+// Page HTML, built once in setup(), reused for every "/" request
+String pageHtml;
+
+// ---------------------------------------------------------------------------
+// Forward declarations
+// ---------------------------------------------------------------------------
+void buildStatusJson(String &out);
+void pushStatus();
+void buildPageHtml(String &out);
+void dispatchAction(const char* path);
+void setupWebServer();
 
 // ---------------------------------------------------------------------------
 // LED helpers
@@ -180,7 +197,7 @@ void updateBite() {
         applyEyes();
         FastLED.show();
         biteState = BITE_IDLE;
-        strncpy(lastAction, "bite done", sizeof(lastAction) - 1);
+        pushStatus();
       } else {
         eyesRed = !eyesRed;
         applyEyes();
@@ -197,187 +214,242 @@ void triggerBite() {
   flickerStep = 0;
   biteState   = BITE_FLICKER_IN;
   biteStepMs  = millis();
-  strncpy(lastAction, "biting!", sizeof(lastAction) - 1);
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helpers
+// SSE helpers
 // ---------------------------------------------------------------------------
-bool parseRequestUrl(const char* buf, char* out, int maxLen) {
-  if (strncmp(buf, "GET ", 4) != 0) { out[0] = '\0'; return false; }
-  const char* p = buf + 4;
-  int i = 0;
-  while (i < maxLen - 1 && *p && *p != ' ' && *p != '?' && *p != '\r' && *p != '\n')
-    out[i++] = *p++;
-  out[i] = '\0';
-  return i > 0;
+void buildStatusJson(String &out) {
+  out = "{\"biting\":";
+  out += (biteState != BITE_IDLE ? "true" : "false");
+  out += ",\"candle\":";
+  out += (candleOn ? "true" : "false");
+  out += ",\"currentEye\":\"";
+  out += currentEyePath;
+  out += "\"}";
 }
 
-void sendStatusJSON(WiFiClient &client) {
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-type:application/json");
-  client.println("Connection: close");
-  client.println();
-  client.print("{\"last\":\"");       client.print(lastAction);
-  client.print("\",\"biting\":");     client.print(biteState != BITE_IDLE ? "true" : "false");
-  client.print(",\"candle\":");       client.print(candleOn ? "true" : "false");
-  client.print(",\"currentEye\":\""); client.print(currentEyePath);
-  client.println("\"}");
-}
-
-void sendNotFound(WiFiClient &client) {
-  client.println("HTTP/1.1 404 Not Found");
-  client.println("Content-type:text/plain");
-  client.println("Connection: close");
-  client.println();
-  client.println("Not Found");
+void pushStatus() {
+  if (events.count() == 0) return;
+  String json;
+  buildStatusJson(json);
+  events.send(json.c_str(), "message", millis());
 }
 
 // ---------------------------------------------------------------------------
-// Action dispatch
+// Eye options
 // ---------------------------------------------------------------------------
 struct EyeOption { const char* path; CRGB color; };
 static const EyeOption eyeOptions[] = {
-  {"eye_yellow",     CRGB::Yellow},
-  {"eye_red",        CRGB::Red},
-  {"eye_blue",       CRGB::Blue},
-  {"eye_green",      CRGB::Green},
-  {"eye_purple",     CRGB::Purple},
-  {"eye_off",        CRGB::Black}
+  {"eye_yellow",  CRGB::Yellow},
+  {"eye_red",     CRGB::Red},
+  {"eye_blue",    CRGB::Blue},
+  {"eye_green",   CRGB::Green},
+  {"eye_purple",  CRGB::Purple},
+  {"eye_off",     CRGB::Black}
 };
 static const int numEyeOptions = sizeof(eyeOptions) / sizeof(eyeOptions[0]);
 
+// ---------------------------------------------------------------------------
+// HTML helpers (used by buildPageHtml)
+// ---------------------------------------------------------------------------
+static String rgbToHex(const CRGB &c) {
+  char buf[8];
+  snprintf(buf, sizeof(buf), "#%02X%02X%02X", c.r, c.g, c.b);
+  return String(buf);
+}
+
+static bool isLightColor(const CRGB &c) {
+  int lum = (c.r * 299 + c.g * 587 + c.b * 114) / 1000;
+  return lum > 180;
+}
+
+// ---------------------------------------------------------------------------
+// Action dispatch — runs on the main task (called from loop())
+// ---------------------------------------------------------------------------
 void dispatchAction(const char* path) {
   if (strcmp(path, "bite") == 0) {
     triggerBite();
+    pushStatus();
     return;
   }
   if (strcmp(path, "mouth_open") == 0) {
-    if (biteState == BITE_IDLE) { mouthServo.write(SERVO_OPEN); strncpy(lastAction, "mouth open", sizeof(lastAction) - 1); }
+    if (biteState == BITE_IDLE) { mouthServo.write(SERVO_OPEN); }
+    pushStatus();
     return;
   }
   if (strcmp(path, "mouth_close") == 0) {
-    if (biteState == BITE_IDLE) { mouthServo.write(SERVO_CLOSED); strncpy(lastAction, "mouth closed", sizeof(lastAction) - 1); }
+    if (biteState == BITE_IDLE) { mouthServo.write(SERVO_CLOSED); }
+    pushStatus();
     return;
   }
   if (strcmp(path, "candle") == 0) {
     candleOn = !candleOn;
     if (!candleOn) { fill_solid(candle, NUM_CANDLE_LEDS, CRGB::Black); FastLED.show(); }
-    strncpy(lastAction, candleOn ? "candle on" : "candle off", sizeof(lastAction) - 1);
+    pushStatus();
     return;
   }
   for (int i = 0; i < numEyeOptions; i++) {
     if (strcmp(path, eyeOptions[i].path) == 0) {
       eyeNormalColor = eyeOptions[i].color;
-      strncpy(currentEyePath, eyeOptions[i].path, sizeof(currentEyePath) - 1);
+      currentEyePath = eyeOptions[i].path;
       eyesRed = false;
       applyEyes();
       FastLED.show();
-      strncpy(lastAction, path, sizeof(lastAction) - 1);
+      pushStatus();
       return;
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Page HTML — streamed in chunks to avoid large stack allocations
+// Page HTML — built once at startup into pageHtml
 // ---------------------------------------------------------------------------
-void sendPageHTML(WiFiClient &client) {
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-type:text/html");
-  client.println("Connection: close");
-  client.println();
-
-  // Head + styles
-  client.print(
-    "<!DOCTYPE html><html>"
-    "<head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    "<link rel=\"icon\" href=\"data:,\">"
-    "<style>"
-    "* { margin:0; padding:0; box-sizing:border-box; }"
-    "html { font-family:Helvetica,Arial,sans-serif; }"
-    "body { background:#1a1a1a; color:#fff; padding:11px; padding-bottom:84px; }"
-    "h1 { text-align:center; margin-bottom:15px; font-size:24px; }"
-    "h2 { text-align:center; margin:15px 0 8px; font-size:17px; color:#aaa; }"
-    ".grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));"
-    "gap:8px; max-width:800px; margin:0 auto 15px; }"
-    ".btn { border:none; border-radius:6px; color:#fff; padding:15px 11px;"
-    "font-family:inherit; font-size:15px; font-weight:bold; cursor:pointer;"
-    "transition:all .2s; text-align:center; box-shadow:0 3px 5px rgba(0,0,0,.3); }"
-    ".btn:hover { transform:translateY(-2px); box-shadow:0 5px 9px rgba(0,0,0,.4); opacity:.9; }"
-    ".btn:active { transform:translateY(0); box-shadow:0 2px 3px rgba(0,0,0,.3); }"
-    ".btn.on { outline:3px solid #fff; outline-offset:-3px; filter:brightness(1.3); }"
-    ".btn-bite { background:#c0392b; font-size:22px; padding:22px; grid-column:1/-1; }"
-    ".btn-candle { background:#d35400; }"
-    ".btn-mouth { background:#5d6d7e; }"
-    ".btn-eye { background:#2471a3; }"
-    ".status-bar { position:fixed; bottom:0; left:0; right:0; background:#2a2a2a;"
-    "border-top:2px solid #444; padding:8px 11px; box-shadow:0 -2px 8px rgba(0,0,0,.5); }"
-    ".status-bar h3 { margin:0 0 6px; font-size:11px; color:#888; text-align:center; }"
-    ".status-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));"
-    "gap:6px; max-width:800px; margin:0 auto; font-size:9px; }"
-    ".status-item { background:#1a1a1a; padding:5px 8px; border-radius:3px; border:1px solid #444; }"
-    ".status-item strong { color:#aaa; margin-right:5px; }"
-    "</style></head>"
-    "<body><h1>&#127874; Cupcake</h1>"
-  );
+void buildPageHtml(String &out) {
+  out.reserve(4096);
+  out = "<!DOCTYPE html><html>"
+        "<head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<link rel=\"icon\" href=\"data:,\">"
+        "<style>"
+        "* { margin:0; padding:0; box-sizing:border-box; }"
+        "html { font-family:Helvetica,Arial,sans-serif; }"
+        "body { background:#1a1a1a; color:#fff; padding:11px; padding-bottom:84px; }"
+        "h1 { text-align:center; margin-bottom:15px; font-size:24px; }"
+        "h2 { text-align:center; margin:15px 0 8px; font-size:17px; color:#aaa; }"
+        ".grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));"
+        "gap:8px; max-width:800px; margin:0 auto 15px; }"
+        ".btn { border:none; border-radius:6px; color:#fff; padding:15px 11px;"
+        "font-family:inherit; font-size:15px; font-weight:bold; cursor:pointer;"
+        "transition:all .2s; text-align:center; box-shadow:0 3px 5px rgba(0,0,0,.3); }"
+        ".btn:hover { transform:translateY(-2px); box-shadow:0 5px 9px rgba(0,0,0,.4); opacity:.9; }"
+        ".btn:active { transform:translateY(0); box-shadow:0 2px 3px rgba(0,0,0,.3); }"
+        ".btn.on { outline:3px solid #fff; outline-offset:-3px; filter:brightness(1.3); }"
+        ".btn-bite { background:#c0392b; font-size:22px; padding:22px; grid-column:1/-1; }"
+        ".btn-mouth { background:#5d6d7e; }"
+        ".toggle-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));"
+        "gap:8px; max-width:800px; margin:0 auto 15px; }"
+        ".toggle { background-color:#2a2a2a; border:1px solid #444; border-radius:6px; padding:12px 16px;"
+        "cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:12px;"
+        "font-size:15px; font-weight:bold; color:white; transition:all .2s;"
+        "box-shadow:0 3px 5px rgba(0,0,0,.3); user-select:none; -webkit-tap-highlight-color:transparent; }"
+        ".toggle:hover { background-color:#353535; transform:translateY(-2px); box-shadow:0 5px 9px rgba(0,0,0,.4); }"
+        ".toggle:active { transform:translateY(0); }"
+        ".toggle-switch { width:42px; height:24px; background:#555; border-radius:12px;"
+        "position:relative; flex-shrink:0; transition:background .2s; }"
+        ".toggle-switch::before { content:''; position:absolute; top:3px; left:3px;"
+        "width:18px; height:18px; background:white; border-radius:50%; transition:transform .2s; }"
+        ".toggle.on { background-color:#1f3a2a; border-color:#4ade80; }"
+        ".toggle.on .toggle-switch { background:#4ade80; }"
+        ".toggle.on .toggle-switch::before { transform:translateX(18px); }"
+        ".status-bar { position:fixed; bottom:0; left:0; right:0; background:#2a2a2a;"
+        "border-top:2px solid #444; padding:8px 11px; box-shadow:0 -2px 8px rgba(0,0,0,.5); }"
+        ".status-bar h3 { margin:0 0 6px; font-size:11px; color:#888; text-align:center; }"
+        ".status-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));"
+        "gap:6px; max-width:800px; margin:0 auto; font-size:9px; }"
+        ".status-item { background:#1a1a1a; padding:5px 8px; border-radius:3px; border:1px solid #444; }"
+        ".status-item strong { color:#aaa; margin-right:5px; }"
+        "</style></head>"
+        "<body><h1>&#127874; Cupcake</h1>";
 
   // Actions section
-  client.print(
-    "<h2>Actions</h2><div class=\"grid\">"
-    "<button class=\"btn btn-bite\" data-path=\"bite\" onclick=\"t('bite')\">BITE</button>"
-    "<button class=\"btn btn-candle\" data-path=\"candle\" onclick=\"t('candle')\">candle</button>"
-    "</div>"
-  );
+  out += "<h2>Actions</h2><div class=\"grid\">"
+         "<button class=\"btn btn-bite\" data-path=\"bite\" onclick=\"t('bite')\">BITE</button>"
+         "</div>";
+
+  // Toggles section
+  out += "<h2>Toggles</h2><div class=\"toggle-grid\">"
+         "<div class=\"toggle\" id=\"tog-candle\" onclick=\"t('candle')\">"
+         "<span>Candle</span><span class=\"toggle-switch\"></span>"
+         "</div>"
+         "</div>";
 
   // Calibration section
-  client.print(
-    "<h2>Calibration</h2><div class=\"grid\">"
-    "<button class=\"btn btn-mouth\" data-path=\"mouth_open\" onclick=\"t('mouth_open')\">mouth open</button>"
-    "<button class=\"btn btn-mouth\" data-path=\"mouth_close\" onclick=\"t('mouth_close')\">mouth close</button>"
-    "</div>"
-  );
+  out += "<h2>Calibration</h2><div class=\"grid\">"
+         "<button class=\"btn btn-mouth\" data-path=\"mouth_open\" onclick=\"t('mouth_open')\">mouth open</button>"
+         "<button class=\"btn btn-mouth\" data-path=\"mouth_close\" onclick=\"t('mouth_close')\">mouth close</button>"
+         "</div>";
 
-  // Eye color section
-  client.print(
-    "<h2>Eye Color</h2><div class=\"grid\">"
-    "<button class=\"btn btn-eye\" data-path=\"eye_yellow\" onclick=\"t('eye_yellow')\">yellow</button>"
-    "<button class=\"btn btn-eye\" data-path=\"eye_red\" onclick=\"t('eye_red')\">red</button>"
-    "<button class=\"btn btn-eye\" data-path=\"eye_blue\" onclick=\"t('eye_blue')\">blue</button>"
-    "<button class=\"btn btn-eye\" data-path=\"eye_green\" onclick=\"t('eye_green')\">green</button>"
-    "<button class=\"btn btn-eye\" data-path=\"eye_purple\" onclick=\"t('eye_purple')\">purple</button>"
-    "<button class=\"btn btn-eye\" data-path=\"eye_off\" onclick=\"t('eye_off')\">off</button>"
-    "</div>"
-  );
+  // Eye Color section — buttons use their own CRGB color as background
+  out += "<h2>Eye Color</h2><div class=\"grid\">";
+  for (int i = 0; i < numEyeOptions; i++) {
+    const EyeOption &opt = eyeOptions[i];
+    // "eye_off" uses a dark grey so the button is visible
+    CRGB btnColor = (strcmp(opt.path, "eye_off") == 0) ? CRGB(40, 40, 40) : opt.color;
+    String hex = rgbToHex(btnColor);
+    bool light = isLightColor(btnColor);
+    // Strip "eye_" prefix for display label
+    String label = String(opt.path).substring(4);
+
+    out += "<button class=\"btn\" data-path=\"";
+    out += opt.path;
+    out += "\" onclick=\"t('";
+    out += opt.path;
+    out += "')\" style=\"background-color:";
+    out += hex;
+    out += ";color:";
+    out += (light ? "#111" : "#fff");
+    out += ";\">";
+    out += label;
+    out += "</button>";
+  }
+  out += "</div>";
 
   // Status bar
-  client.print(
-    "<div class=\"status-bar\"><h3>System Status</h3><div class=\"status-grid\">"
-    "<div class=\"status-item\"><strong>Network:</strong> Cupcake (192.168.4.1)</div>"
-    "<div class=\"status-item\"><strong>Candle:</strong> <span id=\"cv\">&mdash;</span></div>"
-    "<div class=\"status-item\"><strong>Eyes:</strong> <span id=\"ey\">&mdash;</span></div>"
-    "<div class=\"status-item\"><strong>Last:</strong> <span id=\"la\">&mdash;</span></div>"
-    "</div></div>"
-  );
+  out += "<div class=\"status-bar\"><h3>System Status</h3><div class=\"status-grid\">"
+         "<div class=\"status-item\"><strong>Network:</strong> Cupcake (192.168.4.1)</div>"
+         "<div class=\"status-item\"><strong>Candle:</strong> <span id=\"cv\">&mdash;</span></div>"
+         "<div class=\"status-item\"><strong>Eyes:</strong> <span id=\"ey\">&mdash;</span></div>"
+         "</div></div>";
 
-  // Embedded JS: button dispatch + 2s status polling + highlight management
-  client.print(
-    "<script>"
-    "function hl(p,on){const b=document.querySelector('[data-path=\"'+p+'\"]');if(b)b.classList.toggle('on',on);}"
-    "function r(d){if(!d)return;"
-    "document.getElementById('la').textContent=d.last;"
-    "document.getElementById('cv').textContent=d.candle?'On':'Off';"
-    "document.getElementById('ey').textContent=d.currentEye.replace('eye_','').replace('_',' ');"
-    "document.querySelectorAll('.btn-eye.on').forEach(b=>b.classList.remove('on'));"
-    "hl(d.currentEye,true);"
-    "hl('candle',d.candle);}"
-    "async function t(p){try{const x=await fetch('/a/'+p);r(await x.json());}catch(e){}}"
-    "async function q(){try{const x=await fetch('/status');r(await x.json());}catch(e){}}"
-    "setInterval(q,2000);q();"
-    "</script>"
-    "</body></html>"
-  );
-  client.println();
+  // Embedded JS: SSE for live status pushes, fire-and-forget action triggers
+  out += "<script>"
+         "function hl(p,on){const b=document.querySelector('[data-path=\"'+p+'\"]');if(b)b.classList.toggle('on',on);}"
+         "function r(d){if(!d)return;"
+         "document.getElementById('cv').textContent=d.candle?'On':'Off';"
+         "document.getElementById('ey').textContent=d.currentEye.replace('eye_','').replace('_',' ');"
+         "document.querySelectorAll('.btn.on').forEach(b=>b.classList.remove('on'));"
+         "if(d.currentEye)hl(d.currentEye,true);"
+         "document.getElementById('tog-candle').classList.toggle('on',!!d.candle);}"
+         "async function t(p){try{await fetch('/a/'+p);}catch(e){}}"
+         "const es=new EventSource('/events');"
+         "es.onmessage=e=>{try{r(JSON.parse(e.data));}catch(err){}};"
+         "</script>"
+         "</body></html>";
+}
+
+// ---------------------------------------------------------------------------
+// Web server setup
+// ---------------------------------------------------------------------------
+void setupWebServer() {
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
+    req->send(200, "text/html; charset=utf-8", pageHtml);
+  });
+
+  // SSE endpoint — clients open once, receive pushes
+  events.onConnect([](AsyncEventSourceClient *client) {
+    String json;
+    buildStatusJson(json);
+    client->send(json.c_str(), "message", millis());
+  });
+  server.addHandler(&events);
+
+  // /a/<path> action dispatcher — enqueue for loop() to execute
+  server.onNotFound([](AsyncWebServerRequest *req) {
+    const String &url = req->url();
+    if (req->method() == HTTP_GET && url.startsWith("/a/")) {
+      if (actionQueue) {
+        ActionMsg msg;
+        strncpy(msg.path, url.c_str() + 3, ACTION_PATH_MAX - 1);
+        msg.path[ACTION_PATH_MAX - 1] = '\0';
+        xQueueSend(actionQueue, &msg, 0);  // non-blocking; drop if full
+      }
+      req->send(200, "text/plain", "OK");
+    } else {
+      req->send(404, "text/plain", "Not Found");
+    }
+  });
+
+  server.begin();
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +458,9 @@ void sendPageHTML(WiFiClient &client) {
 void setup() {
   Serial.begin(115200);
   Serial.println("Cupcake starting...");
+
+  // Action queue (async handlers -> loop())
+  actionQueue = xQueueCreate(ACTION_QUEUE_DEPTH, sizeof(ActionMsg));
 
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
   FastLED.clear();
@@ -407,7 +482,10 @@ void setup() {
   Serial.print("AP started: "); Serial.println(ap_ssid);
   Serial.print("IP: ");         Serial.println(WiFi.softAPIP());
 
-  server.begin();
+  // Build page HTML once (static content, never changes at runtime)
+  buildPageHtml(pageHtml);
+
+  setupWebServer();
   Serial.println("Ready.");
 }
 
@@ -415,51 +493,16 @@ void setup() {
 // Loop
 // ---------------------------------------------------------------------------
 void loop() {
-  updateBite();
-  updateCandle();
-
-  WiFiClient client = server.accept();
-  if (!client) return;
-
-  client.setNoDelay(true);
-  currentTime  = millis();
-  previousTime = currentTime;
-  headerLen    = 0;
-  header[0]    = '\0';
-  int lineLen  = 0;
-
-  while (client.connected() && currentTime - previousTime <= timeoutTime) {
-    currentTime = millis();
-    if (client.available()) {
-      char c = client.read();
-      if (headerLen < MAX_HEADER_SIZE - 1) { header[headerLen++] = c; header[headerLen] = '\0'; }
-      if (c == '\n') {
-        if (lineLen == 0) {
-          char url[MAX_PATH_SIZE];
-          if (parseRequestUrl(header, url, MAX_PATH_SIZE)) {
-            if (strncmp(url, "/a/", 3) == 0) {
-              dispatchAction(url + 3);
-              sendStatusJSON(client);
-            } else if (strcmp(url, "/status") == 0) {
-              sendStatusJSON(client);
-            } else if (strcmp(url, "/") == 0) {
-              sendPageHTML(client);
-            } else {
-              sendNotFound(client);
-            }
-          } else {
-            sendNotFound(client);
-          }
-          break;
-        }
-        lineLen = 0;
-      } else if (c != '\r') {
-        lineLen++;
-      }
+  // Drain any actions queued by the async HTTP task
+  if (actionQueue) {
+    ActionMsg msg;
+    while (xQueueReceive(actionQueue, &msg, 0) == pdTRUE) {
+      dispatchAction(msg.path);
     }
   }
 
-  headerLen = 0;
-  header[0] = '\0';
-  client.stop();
+  updateBite();
+  updateCandle();
+
+  delay(2);
 }
