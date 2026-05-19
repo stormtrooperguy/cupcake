@@ -9,12 +9,13 @@
 #include <ESPAsyncWebServer.h>
 #include <FastLED.h>
 #include <ESP32Servo.h>
+#include "secrets.h"
 
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
 const char* ap_ssid     = "Cupcake";
-const char* ap_password = "changeme";   // 8-63 chars
+const char* ap_password = AP_PASSWORD;
 
 // ---------------------------------------------------------------------------
 // Hardware pins — adjust after physical install
