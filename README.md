@@ -38,17 +38,20 @@ The password is defined in `src/secrets.h` (gitignored). Copy `src/secrets.h.exa
 #define AP_PASSWORD "yourpassword"
 ```
 
-| Button | What it does |
+| Control | What it does |
 |---|---|
-| **BITE** | Opens then snaps the mouth closed; eyes flash red during the snap |
-| **candle** | Toggles the candle LED on/off |
-| **warm white / red / blue / green / purple / off** | Sets the resting eye color |
+| **CHOMP** | Eyes flicker to red, mouth opens then snaps closed, eyes flicker back to resting color |
+| **Candle** toggle | Turns the candle LED on/off (defaults to on) |
+| **Glitch** toggle | Enables glitch mode: eyes occasionally malfunction, flickering off or red on one or both eyes |
+| **yellow / red / blue / green / purple / off** | Sets the resting eye color |
+| **mouth open / mouth close** | Moves the servo to the open or closed position for calibration |
 
 ## Behavior
 
-- **Eyes** default to warm white at startup. During a bite they go red, then revert to the resting color when the snap completes.
-- **Candle** flickers all 7 pixels through independent random orange/yellow/red values at 30–120 ms intervals when enabled, creating an organic flame effect.
-- **Bite** is non-blocking: the mouth snaps open (`BITE_OPEN_MS`) then closes (`BITE_CLOSE_MS`) while the web server keeps responding.
+- **Eyes** default to yellow at startup. During a chomp they flicker to red, then flicker back to the resting color when the snap completes.
+- **Candle** flickers all 7 pixels through independent random orange/yellow/red values at 30–120 ms intervals when enabled, creating an organic flame effect. On by default.
+- **Glitch** mode intermittently malfunctions one or both eyes, snapping to black or red for 1–3 rapid flicker cycles, then recovering. Events occur every 1.5–9 seconds. Suspends automatically during a chomp.
+- **Chomp** is non-blocking: the mouth snaps open (`BITE_OPEN_MS`) then closes (`BITE_CLOSE_MS`) while the web server keeps responding.
 
 ## Configuration
 
@@ -66,15 +69,17 @@ All tunable values are `#define` constants at the top of [`src/main.cpp`](src/ma
 #define SERVO_OPEN     45   // snapping position
 ```
 
-### Bite timing
+### Chomp timing
 ```cpp
-#define BITE_OPEN_MS    150   // mouth-open dwell
-#define BITE_CLOSE_MS   120   // pause after close before restoring eyes
+#define BITE_OPEN_MS          400   // mouth-open dwell
+#define BITE_CLOSE_MS         120   // pause after close before flicker-out begins
+#define BITE_FLICKER_HALF_MS   60   // duration of each on/off half-cycle during eye flicker
+#define BITE_FLICKER_COUNT      3   // number of half-cycle transitions (odd = ends on target color)
 ```
 
 ### Eye brightness
 ```cpp
-#define EYE_BRIGHTNESS   80   // 0–255
+#define EYE_BRIGHTNESS   50   // 0–255
 ```
 
 ### Candle flicker rate
