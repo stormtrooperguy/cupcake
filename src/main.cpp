@@ -84,6 +84,14 @@ bool          candleOn      = true;
 unsigned long candleNextMs  = 0;
 
 // ---------------------------------------------------------------------------
+// Glitch state
+// ---------------------------------------------------------------------------
+bool          glitchOn      = false;
+bool          glitchActive  = false;
+unsigned long glitchNextMs  = 0;   // when next glitch event fires
+unsigned long glitchEndMs   = 0;   // when current glitch event ends
+
+// ---------------------------------------------------------------------------
 // Action queue: AsyncWebServer handlers enqueue requested paths; loop() drains
 // the queue and runs the actual dispatch. Keeps every hardware operation
 // (servo, FastLED) single-threaded inside loop() — no concurrent access with
@@ -215,6 +223,43 @@ void triggerBite() {
   flickerStep = 0;
   biteState   = BITE_FLICKER_IN;
   biteStepMs  = millis();
+  // Reset glitch so it starts fresh after the bite completes
+  glitchActive = false;
+}
+
+// ---------------------------------------------------------------------------
+// Glitch eye animation — call every loop iteration
+//
+// When enabled, eyes normally show eyeNormalColor but intermittently
+// malfunction: one or both eyes snap to black or red for a brief moment,
+// then recover. Suspends automatically during the bite sequence.
+// ---------------------------------------------------------------------------
+void updateGlitch() {
+  if (!glitchOn || biteState != BITE_IDLE) return;
+  unsigned long now = millis();
+
+  if (glitchActive) {
+    if (now >= glitchEndMs) {
+      // Glitch over — restore both eyes to normal
+      glitchActive = false;
+      applyEyes();
+      FastLED.show();
+      glitchNextMs = now + random(500, 3000);
+    }
+  } else {
+    if (now >= glitchNextMs) {
+      glitchActive = true;
+      glitchEndMs  = now + random(20, 150);
+
+      // Which eyes? 1=left, 2=right, 3=both
+      int  mask  = random(3) + 1;
+      CRGB color = (random(2) == 0) ? CRGB::Black : scaleEye(CRGB::Red);
+
+      if (mask & 1) fill_solid(leftEye,  NUM_EYE_LEDS, color);
+      if (mask & 2) fill_solid(rightEye, NUM_EYE_LEDS, color);
+      FastLED.show();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +270,8 @@ void buildStatusJson(String &out) {
   out += (biteState != BITE_IDLE ? "true" : "false");
   out += ",\"candle\":";
   out += (candleOn ? "true" : "false");
+  out += ",\"glitch\":";
+  out += (glitchOn ? "true" : "false");
   out += ",\"currentEye\":\"";
   out += currentEyePath;
   out += "\"}";
@@ -287,6 +334,14 @@ void dispatchAction(const char* path) {
   if (strcmp(path, "candle") == 0) {
     candleOn = !candleOn;
     if (!candleOn) { fill_solid(candle, NUM_CANDLE_LEDS, CRGB::Black); FastLED.show(); }
+    pushStatus();
+    return;
+  }
+  if (strcmp(path, "glitch") == 0) {
+    glitchOn = !glitchOn;
+    glitchActive = false;
+    if (!glitchOn) { applyEyes(); FastLED.show(); }
+    else { glitchNextMs = millis() + random(500, 2000); }
     pushStatus();
     return;
   }
@@ -370,6 +425,9 @@ void buildPageHtml(String &out) {
          "<div class=\"toggle\" id=\"tog-candle\" onclick=\"t('candle')\">"
          "<span>Candle</span><span class=\"toggle-switch\"></span>"
          "</div>"
+         "<div class=\"toggle\" id=\"tog-glitch\" onclick=\"t('glitch')\">"
+         "<span>Glitch</span><span class=\"toggle-switch\"></span>"
+         "</div>"
          "</div>";
 
   // Calibration section — round buttons
@@ -418,7 +476,8 @@ void buildPageHtml(String &out) {
          "document.getElementById('ey').textContent=d.currentEye.replace('eye_','').replace('_',' ');"
          "document.querySelectorAll('.btn.on').forEach(b=>b.classList.remove('on'));"
          "if(d.currentEye)hl(d.currentEye,true);"
-         "document.getElementById('tog-candle').classList.toggle('on',!!d.candle);}"
+         "document.getElementById('tog-candle').classList.toggle('on',!!d.candle);"
+         "document.getElementById('tog-glitch').classList.toggle('on',!!d.glitch);}"
          "async function t(p){try{await fetch('/a/'+p);}catch(e){}}"
          "const es=new EventSource('/events');"
          "es.onmessage=e=>{try{r(JSON.parse(e.data));}catch(err){}};"
@@ -511,6 +570,7 @@ void loop() {
   }
 
   updateBite();
+  updateGlitch();
   updateCandle();
 
   delay(2);
