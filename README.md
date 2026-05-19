@@ -30,7 +30,13 @@ The servo and LEDs are powered externally (5 V). All grounds must be common.
 
 ## Web Interface
 
-Connect to the `Cupcake` WiFi network (password: `changeme`) and navigate to **http://192.168.4.1**.
+Connect to the `Cupcake` WiFi network and navigate to **http://192.168.4.1**.
+
+The password is defined in `src/secrets.h` (gitignored). Copy `src/secrets.h.example` to `src/secrets.h` and set your own password before building:
+
+```cpp
+#define AP_PASSWORD "yourpassword"
+```
 
 | Button | What it does |
 |---|---|
