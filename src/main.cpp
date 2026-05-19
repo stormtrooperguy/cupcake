@@ -86,10 +86,12 @@ unsigned long candleNextMs  = 0;
 // ---------------------------------------------------------------------------
 // Glitch state
 // ---------------------------------------------------------------------------
-bool          glitchOn      = false;
-bool          glitchActive  = false;
-unsigned long glitchNextMs  = 0;   // when next glitch event fires
-unsigned long glitchEndMs   = 0;   // when current glitch event ends
+bool          glitchOn          = false;
+unsigned long glitchNextMs      = 0;   // when next glitch event fires (quiet phase)
+int           glitchStep        = 0;   // half-cycles remaining (0 = quiet)
+unsigned long glitchStepMs      = 0;   // when current half-cycle ends
+int           glitchEyeMask     = 0;   // which eyes (1=left, 2=right, 3=both)
+CRGB          glitchColor;             // glitch color for this event
 
 // ---------------------------------------------------------------------------
 // Action queue: AsyncWebServer handlers enqueue requested paths; loop() drains
@@ -224,40 +226,54 @@ void triggerBite() {
   biteState   = BITE_FLICKER_IN;
   biteStepMs  = millis();
   // Reset glitch so it starts fresh after the bite completes
-  glitchActive = false;
+  glitchStep = 0;
 }
 
 // ---------------------------------------------------------------------------
 // Glitch eye animation — call every loop iteration
 //
 // When enabled, eyes normally show eyeNormalColor but intermittently
-// malfunction: one or both eyes snap to black or red for a brief moment,
-// then recover. Suspends automatically during the bite sequence.
+// malfunction: one or both eyes flicker 1–3 times (rapid half-cycles of
+// glitch color / normal, ~30–70 ms each), then recover. Quiet gap between
+// events is 1500–9000 ms. Suspends during the bite sequence.
 // ---------------------------------------------------------------------------
 void updateGlitch() {
   if (!glitchOn || biteState != BITE_IDLE) return;
   unsigned long now = millis();
 
-  if (glitchActive) {
-    if (now >= glitchEndMs) {
-      // Glitch over — restore both eyes to normal
-      glitchActive = false;
-      applyEyes();
-      FastLED.show();
-      glitchNextMs = now + random(500, 3000);
+  if (glitchStep > 0) {
+    // Mid-flicker — wait for current half-cycle to expire
+    if (now >= glitchStepMs) {
+      glitchStep--;
+      if (glitchStep == 0) {
+        // Sequence complete — restore eyes and schedule next event
+        applyEyes();
+        FastLED.show();
+        glitchNextMs = now + random(1500, 9000);
+      } else if (glitchStep % 2 == 1) {
+        // Odd steps remaining → show normal between flickers
+        applyEyes();
+        FastLED.show();
+        glitchStepMs = now + random(30, 70);
+      } else {
+        // Even steps remaining → show glitch color again
+        if (glitchEyeMask & 1) fill_solid(leftEye,  NUM_EYE_LEDS, glitchColor);
+        if (glitchEyeMask & 2) fill_solid(rightEye, NUM_EYE_LEDS, glitchColor);
+        FastLED.show();
+        glitchStepMs = now + random(30, 70);
+      }
     }
   } else {
+    // Quiet phase — wait for next event
     if (now >= glitchNextMs) {
-      glitchActive = true;
-      glitchEndMs  = now + random(20, 150);
-
-      // Which eyes? 1=left, 2=right, 3=both
-      int  mask  = random(3) + 1;
-      CRGB color = (random(2) == 0) ? CRGB::Black : scaleEye(CRGB::Red);
-
-      if (mask & 1) fill_solid(leftEye,  NUM_EYE_LEDS, color);
-      if (mask & 2) fill_solid(rightEye, NUM_EYE_LEDS, color);
+      glitchEyeMask = random(3) + 1;                                      // 1=left 2=right 3=both
+      glitchColor   = (random(2) == 0) ? CRGB::Black : scaleEye(CRGB::Red);
+      glitchStep    = random(1, 4) * 2;                                   // 1–3 flickers → 2–6 half-cycles
+      // Show first glitch half-cycle immediately
+      if (glitchEyeMask & 1) fill_solid(leftEye,  NUM_EYE_LEDS, glitchColor);
+      if (glitchEyeMask & 2) fill_solid(rightEye, NUM_EYE_LEDS, glitchColor);
       FastLED.show();
+      glitchStepMs = now + random(30, 70);
     }
   }
 }
@@ -339,9 +355,9 @@ void dispatchAction(const char* path) {
   }
   if (strcmp(path, "glitch") == 0) {
     glitchOn = !glitchOn;
-    glitchActive = false;
+    glitchStep = 0;
     if (!glitchOn) { applyEyes(); FastLED.show(); }
-    else { glitchNextMs = millis() + random(500, 2000); }
+    else { glitchNextMs = millis() + random(1500, 9000); }
     pushStatus();
     return;
   }
