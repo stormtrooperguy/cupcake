@@ -316,11 +316,11 @@ void buildPageHtml(String &out) {
         "body { background:#1a1a1a; color:#fff; padding:11px; padding-bottom:84px; }"
         "h1 { text-align:center; margin-bottom:15px; font-size:24px; }"
         "h2 { text-align:center; margin:15px 0 8px; font-size:17px; color:#aaa; }"
-        // Chomp button — full-width, rectangular, lives alone
-        ".chomp-wrap { max-width:800px; margin:0 auto 15px; }"
-        ".btn-chomp { width:100%; border:none; border-radius:10px; background:#c0392b;"
+        // Chomp button — large circle, centred
+        ".chomp-wrap { max-width:800px; margin:0 auto 15px; display:flex; justify-content:center; }"
+        ".btn-chomp { width:200px; height:200px; border:none; border-radius:50%; background:#c0392b;"
         "color:#fff; font-family:inherit; font-size:26px; font-weight:bold; cursor:pointer;"
-        "padding:24px; transition:all .2s; box-shadow:0 4px 8px rgba(0,0,0,.4); }"
+        "transition:all .2s; box-shadow:0 4px 8px rgba(0,0,0,.4); }"
         ".btn-chomp:hover { transform:translateY(-2px); box-shadow:0 6px 12px rgba(0,0,0,.5); opacity:.9; }"
         ".btn-chomp:active { transform:translateY(0); box-shadow:0 2px 4px rgba(0,0,0,.3); }"
         // Round button grid — like duckling
