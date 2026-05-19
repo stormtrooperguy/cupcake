@@ -316,15 +316,23 @@ void buildPageHtml(String &out) {
         "body { background:#1a1a1a; color:#fff; padding:11px; padding-bottom:84px; }"
         "h1 { text-align:center; margin-bottom:15px; font-size:24px; }"
         "h2 { text-align:center; margin:15px 0 8px; font-size:17px; color:#aaa; }"
-        ".grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));"
-        "gap:8px; max-width:800px; margin:0 auto 15px; }"
-        ".btn { border:none; border-radius:6px; color:#fff; padding:15px 11px;"
-        "font-family:inherit; font-size:15px; font-weight:bold; cursor:pointer;"
-        "transition:all .2s; text-align:center; box-shadow:0 3px 5px rgba(0,0,0,.3); }"
+        // Chomp button — full-width, rectangular, lives alone
+        ".chomp-wrap { max-width:800px; margin:0 auto 15px; }"
+        ".btn-chomp { width:100%; border:none; border-radius:10px; background:#c0392b;"
+        "color:#fff; font-family:inherit; font-size:26px; font-weight:bold; cursor:pointer;"
+        "padding:24px; transition:all .2s; box-shadow:0 4px 8px rgba(0,0,0,.4); }"
+        ".btn-chomp:hover { transform:translateY(-2px); box-shadow:0 6px 12px rgba(0,0,0,.5); opacity:.9; }"
+        ".btn-chomp:active { transform:translateY(0); box-shadow:0 2px 4px rgba(0,0,0,.3); }"
+        // Round button grid — like duckling
+        ".button-grid { display:grid; grid-template-columns:repeat(auto-fit,88px);"
+        "gap:10px; max-width:800px; margin:0 auto 15px; justify-content:center; }"
+        ".btn { border:none; border-radius:50%; aspect-ratio:1/1; width:88px;"
+        "color:#fff; padding:6px; font-family:inherit; font-size:12px; font-weight:bold;"
+        "cursor:pointer; transition:all .2s; display:flex; align-items:center; justify-content:center;"
+        "text-align:center; box-shadow:0 3px 5px rgba(0,0,0,.3); }"
         ".btn:hover { transform:translateY(-2px); box-shadow:0 5px 9px rgba(0,0,0,.4); opacity:.9; }"
         ".btn:active { transform:translateY(0); box-shadow:0 2px 3px rgba(0,0,0,.3); }"
         ".btn.on { outline:3px solid #fff; outline-offset:-3px; filter:brightness(1.3); }"
-        ".btn-bite { background:#c0392b; font-size:22px; padding:22px; grid-column:1/-1; }"
         ".btn-mouth { background:#5d6d7e; }"
         ".toggle-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));"
         "gap:8px; max-width:800px; margin:0 auto 15px; }"
@@ -351,9 +359,9 @@ void buildPageHtml(String &out) {
         "</style></head>"
         "<body><h1>&#127874; Cupcake</h1>";
 
-  // Actions section
-  out += "<h2>Actions</h2><div class=\"grid\">"
-         "<button class=\"btn btn-bite\" data-path=\"bite\" onclick=\"t('bite')\">BITE</button>"
+  // Chomp button — full-width on its own row
+  out += "<h2>Actions</h2><div class=\"chomp-wrap\">"
+         "<button class=\"btn-chomp\" data-path=\"bite\" onclick=\"t('bite')\">CHOMP</button>"
          "</div>";
 
   // Toggles section
@@ -363,14 +371,14 @@ void buildPageHtml(String &out) {
          "</div>"
          "</div>";
 
-  // Calibration section
-  out += "<h2>Calibration</h2><div class=\"grid\">"
+  // Calibration section — round buttons
+  out += "<h2>Calibration</h2><div class=\"button-grid\">"
          "<button class=\"btn btn-mouth\" data-path=\"mouth_open\" onclick=\"t('mouth_open')\">mouth open</button>"
          "<button class=\"btn btn-mouth\" data-path=\"mouth_close\" onclick=\"t('mouth_close')\">mouth close</button>"
          "</div>";
 
-  // Eye Color section — buttons use their own CRGB color as background
-  out += "<h2>Eye Color</h2><div class=\"grid\">";
+  // Eye Color section — round buttons, each colored with its own CRGB value
+  out += "<h2>Eye Color</h2><div class=\"button-grid\">";
   for (int i = 0; i < numEyeOptions; i++) {
     const EyeOption &opt = eyeOptions[i];
     // "eye_off" uses a dark grey so the button is visible
