@@ -2,11 +2,13 @@
   Cupcake Control System
   ESP32 firmware: animated mouth servo, NeoPixel eyes, flickering candle LED.
 
-  Runs its own "Cupcake" WiFi AP (http://192.168.4.1) at all times, and also
+  Runs its own "Cupcake" WiFi AP (http://192.168.4.2) at all times, and also
   tries to join the shared "fazbear_sec" network (hosted by the springtrap
   animatronic) if it's in range -- both interfaces run simultaneously
-  (WIFI_AP_STA). The web interface is reachable via either one, and via
-  http://cupcake.local (mDNS) regardless of which network the tablet is on.
+  (WIFI_AP_STA). Cupcake is 192.168.4.2 in both modes, so springtrap can
+  always reach it there directly. The web interface is also reachable via
+  http://cupcake.local (mDNS) for convenience on platforms that support it
+  (not Android browsers).
 */
 
 #include <WiFi.h>
@@ -499,7 +501,7 @@ void buildPageHtml(String &out) {
 
   // Status bar
   out += "<div class=\"status-bar\"><h3>System Status</h3><div class=\"status-grid\">"
-         "<div class=\"status-item\"><strong>Network:</strong> Cupcake AP or fazbear_sec &mdash; http://cupcake.local</div>"
+         "<div class=\"status-item\"><strong>Network:</strong> 192.168.4.2 (Cupcake AP or fazbear_sec) &mdash; http://cupcake.local</div>"
          "<div class=\"status-item\"><strong>Candle:</strong> <span id=\"cv\">&mdash;</span></div>"
          "<div class=\"status-item\"><strong>Eyes:</strong> <span id=\"ey\">&mdash;</span></div>"
          "</div></div>";
@@ -580,10 +582,17 @@ void setup() {
   // Run our own AP and try to join the shared fazbear_sec network at the
   // same time (WIFI_AP_STA). If fazbear_sec isn't in range, WiFi.begin()
   // just never connects -- the AP keeps working fine on its own either way.
+  //
+  // Cupcake is always 192.168.4.2, in both modes: as our own AP's address
+  // (unconventional -- normally the host is .1 -- but these are two
+  // separate, unrelated networks, so there's no conflict) and as a static
+  // IP on fazbear_sec (springtrap, the AP host there, owns .1). This gives
+  // springtrap a fixed, known address to reach cupcake at without needing
+  // mDNS for that specific link.
   WiFi.mode(WIFI_AP_STA);
 
-  IPAddress local_IP(192, 168, 4, 1);
-  IPAddress gateway(192, 168, 4, 1);
+  IPAddress local_IP(192, 168, 4, 2);
+  IPAddress gateway(192, 168, 4, 2);
   IPAddress subnet(255, 255, 255, 0);
   WiFi.softAPConfig(local_IP, gateway, subnet);
   WiFi.softAP(ap_ssid, ap_password);
@@ -591,6 +600,8 @@ void setup() {
   Serial.print("AP started: "); Serial.println(ap_ssid);
   Serial.print("AP IP: ");      Serial.println(WiFi.softAPIP());
 
+  // Static IP on the fazbear_sec side too -- springtrap owns .1 there.
+  WiFi.config(IPAddress(192, 168, 4, 2), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
   WiFi.begin(fazbear_ssid, fazbear_password);
   Serial.print("Also attempting to join: "); Serial.println(fazbear_ssid);
 
