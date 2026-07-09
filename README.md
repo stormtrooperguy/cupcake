@@ -30,13 +30,11 @@ The servo and LEDs are powered externally (5 V). All grounds must be common.
 
 ## Web Interface
 
-Cupcake runs its own `Cupcake` WiFi access point at all times. **At boot** it makes a single attempt (up to `STA_BOOT_JOIN_TIMEOUT_MS`, default 8s) to also join the shared `fazbear_sec` network (hosted by the springtrap animatronic). If `fazbear_sec` answers, cupcake stays in AP+STA mode and is reachable on both networks; if not, it shuts the station off and runs AP-only.
+**At boot**, cupcake joins **either** the shared `fazbear_sec` network (hosted by the springtrap animatronic) as a station, **or** — if `fazbear_sec` isn't found — hosts its own `Cupcake` access point. It tries to join `fazbear_sec` for up to `STA_BOOT_JOIN_TIMEOUT_MS` (default 15s), re-attempting every `STA_ATTEMPT_INTERVAL_MS` so a flaky first association still lands; only if that whole window fails does it fall back to the `Cupcake` AP.
 
-This is a one-time decision — cupcake **never re-scans** for `fazbear_sec` after boot. The reason is a hardware constraint: the ESP32 has a single radio, so a station that sits there *searching* for an absent network keeps yanking the radio off the SoftAP's channel and drops the AP's clients. By committing to "connected or off" at boot, the `Cupcake` AP stays rock-stable in every case. **Consequence:** if springtrap boots *after* cupcake, cupcake won't see it until cupcake is rebooted — so power springtrap on first, or reboot cupcake once springtrap is up.
+It's one or the other — **never both**. Running an AP and a station on the ESP32's single radio, both on the same `192.168.4.x` subnet with the same IP, broke routing (cupcake became unreachable from `fazbear_sec`) and was unstable besides. Committing to a single active interface avoids both problems. The decision is made once at boot and not revisited. **Consequence:** if springtrap boots *after* cupcake, cupcake will have already fallen back to its own AP — so power springtrap on first, or reboot cupcake once springtrap is up, for cupcake to join `fazbear_sec`.
 
-Both APs and the station link are pinned to a fixed WiFi channel (`WIFI_CHANNEL`, default 1 — **must match springtrap's**) so that, when cupcake does join `fazbear_sec`, its shared radio never has to change channels.
-
-Cupcake is **192.168.4.2** in both modes — connect to either network and navigate to **http://192.168.4.2**. `http://cupcake.local` (mDNS) also works, on platforms that support it (not Android browsers).
+Cupcake is **192.168.4.2** in either mode — connect to whichever network is active and navigate to **http://192.168.4.2**. `http://cupcake.local` (mDNS) also works, on platforms that support it (not Android browsers).
 
 Passwords are defined in `src/secrets.h` (gitignored). Copy `src/secrets.h.example` to `src/secrets.h` and set your own values before building:
 
