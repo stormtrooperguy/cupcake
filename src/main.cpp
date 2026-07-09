@@ -1,12 +1,19 @@
 /*
   Cupcake Control System
   ESP32 firmware: animated mouth servo, NeoPixel eyes, flickering candle LED.
-  Web interface served over WiFi AP — connect and navigate to http://192.168.4.1
+
+  Runs its own "Cupcake" WiFi AP (http://192.168.4.1) at all times, and also
+  tries to join the shared "fazbear_sec" network (hosted by the springtrap
+  animatronic) if it's in range -- both interfaces run simultaneously
+  (WIFI_AP_STA). The web interface is reachable via either one, and via
+  http://cupcake.local (mDNS) regardless of which network the tablet is on.
 */
 
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <ESPmDNS.h>
+#include <esp_system.h>  // esp_random() -- hardware RNG, reliable with WiFi active
 #include <FastLED.h>
 #include <ESP32Servo.h>
 #include "secrets.h"
@@ -16,6 +23,19 @@
 // ---------------------------------------------------------------------------
 const char* ap_ssid     = "Cupcake";
 const char* ap_password = AP_PASSWORD;
+const char* mdns_host   = "cupcake";        // reachable at http://cupcake.local
+
+// Shared network hosted by springtrap. Joined opportunistically alongside
+// this device's own AP -- if it's not in range, WiFi.begin() just never
+// connects and cupcake keeps working fine on its own AP.
+const char* fazbear_ssid     = "fazbear_sec";
+const char* fazbear_password = FAZBEAR_PASSWORD;
+
+// STA connection status tracking, serial-logged on change only. Cosmetic --
+// the web server listens on all interfaces regardless of this state.
+wl_status_t   lastWifiStatus  = WL_IDLE_STATUS;
+unsigned long lastWifiCheckMs = 0;
+#define WIFI_CHECK_MS 5000
 
 // ---------------------------------------------------------------------------
 // Hardware pins — adjust after physical install
@@ -479,7 +499,7 @@ void buildPageHtml(String &out) {
 
   // Status bar
   out += "<div class=\"status-bar\"><h3>System Status</h3><div class=\"status-grid\">"
-         "<div class=\"status-item\"><strong>Network:</strong> Cupcake (192.168.4.1)</div>"
+         "<div class=\"status-item\"><strong>Network:</strong> Cupcake AP or fazbear_sec &mdash; http://cupcake.local</div>"
          "<div class=\"status-item\"><strong>Candle:</strong> <span id=\"cv\">&mdash;</span></div>"
          "<div class=\"status-item\"><strong>Eyes:</strong> <span id=\"ey\">&mdash;</span></div>"
          "</div></div>";
@@ -555,7 +575,12 @@ void setup() {
   mouthServo.attach(SERVO_PIN);
   mouthServo.write(SERVO_CLOSED);
 
-  randomSeed(analogRead(0));
+  randomSeed(esp_random());   // hardware RNG -- reliable even with WiFi active
+
+  // Run our own AP and try to join the shared fazbear_sec network at the
+  // same time (WIFI_AP_STA). If fazbear_sec isn't in range, WiFi.begin()
+  // just never connects -- the AP keeps working fine on its own either way.
+  WiFi.mode(WIFI_AP_STA);
 
   IPAddress local_IP(192, 168, 4, 1);
   IPAddress gateway(192, 168, 4, 1);
@@ -564,7 +589,19 @@ void setup() {
   WiFi.softAP(ap_ssid, ap_password);
 
   Serial.print("AP started: "); Serial.println(ap_ssid);
-  Serial.print("IP: ");         Serial.println(WiFi.softAPIP());
+  Serial.print("AP IP: ");      Serial.println(WiFi.softAPIP());
+
+  WiFi.begin(fazbear_ssid, fazbear_password);
+  Serial.print("Also attempting to join: "); Serial.println(fazbear_ssid);
+
+  if (MDNS.begin(mdns_host)) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.print("mDNS responder started: http://");
+    Serial.print(mdns_host);
+    Serial.println(".local");
+  } else {
+    Serial.println("mDNS init failed");
+  }
 
   // Build page HTML once (static content, never changes at runtime)
   buildPageHtml(pageHtml);
@@ -588,6 +625,22 @@ void loop() {
   updateBite();
   updateGlitch();
   updateCandle();
+
+  // Log fazbear_sec join/drop transitions -- doesn't affect anything else,
+  // the control page works the same whether or not this connects.
+  if (millis() - lastWifiCheckMs >= WIFI_CHECK_MS) {
+    lastWifiCheckMs = millis();
+    wl_status_t st = WiFi.status();
+    if (st != lastWifiStatus) {
+      lastWifiStatus = st;
+      if (st == WL_CONNECTED) {
+        Serial.print("Joined fazbear_sec, IP: ");
+        Serial.println(WiFi.localIP());
+      } else {
+        Serial.println("Not connected to fazbear_sec (still reachable via Cupcake AP / cupcake.local)");
+      }
+    }
+  }
 
   delay(2);
 }

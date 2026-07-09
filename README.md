@@ -30,12 +30,15 @@ The servo and LEDs are powered externally (5 V). All grounds must be common.
 
 ## Web Interface
 
-Connect to the `Cupcake` WiFi network and navigate to **http://192.168.4.1**.
+Cupcake runs its own `Cupcake` WiFi access point at all times, and also tries to join the shared `fazbear_sec` network (hosted by the springtrap animatronic) if it's in range — both run simultaneously (`WIFI_AP_STA`). If `fazbear_sec` isn't reachable, cupcake just keeps working on its own AP.
 
-The password is defined in `src/secrets.h` (gitignored). Copy `src/secrets.h.example` to `src/secrets.h` and set your own password before building:
+Connect to either network and navigate to **http://cupcake.local** (mDNS — works regardless of which network you're on). On the `Cupcake` AP directly, `http://192.168.4.1` also works. On `fazbear_sec`, cupcake's IP is assigned by springtrap's DHCP and isn't fixed, so use the `.local` address rather than guessing an IP — or check the serial monitor, which logs `Joined fazbear_sec, IP: ...` once connected.
+
+Passwords are defined in `src/secrets.h` (gitignored). Copy `src/secrets.h.example` to `src/secrets.h` and set your own values before building:
 
 ```cpp
-#define AP_PASSWORD "yourpassword"
+#define AP_PASSWORD "yourpassword"          // Cupcake's own AP
+#define FAZBEAR_PASSWORD "matchingpassword" // must match springtrap's AP_PASSWORD
 ```
 
 | Control | What it does |
