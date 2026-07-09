@@ -30,9 +30,11 @@ The servo and LEDs are powered externally (5 V). All grounds must be common.
 
 ## Web Interface
 
-Cupcake runs its own `Cupcake` WiFi access point at all times, and also tries to join the shared `fazbear_sec` network (hosted by the springtrap animatronic) if it's in range — both run simultaneously (`WIFI_AP_STA`). If `fazbear_sec` isn't reachable, cupcake just keeps working on its own AP.
+Cupcake runs its own `Cupcake` WiFi access point at all times. **At boot** it makes a single attempt (up to `STA_BOOT_JOIN_TIMEOUT_MS`, default 8s) to also join the shared `fazbear_sec` network (hosted by the springtrap animatronic). If `fazbear_sec` answers, cupcake stays in AP+STA mode and is reachable on both networks; if not, it shuts the station off and runs AP-only.
 
-Because the ESP32 has a single radio, AP+STA coexistence requires the SoftAP and the station to share one WiFi channel. Cupcake's AP, its station link to `fazbear_sec`, and springtrap's `fazbear_sec` AP are all pinned to a fixed channel (`WIFI_CHANNEL`, default 1 — **must match springtrap's**). Without this, the station's channel scanning drops the AP intermittently (cupcake's AP appears then keeps disconnecting), and the station only ever probes that one channel so an absent `fazbear_sec` doesn't destabilize the AP.
+This is a one-time decision — cupcake **never re-scans** for `fazbear_sec` after boot. The reason is a hardware constraint: the ESP32 has a single radio, so a station that sits there *searching* for an absent network keeps yanking the radio off the SoftAP's channel and drops the AP's clients. By committing to "connected or off" at boot, the `Cupcake` AP stays rock-stable in every case. **Consequence:** if springtrap boots *after* cupcake, cupcake won't see it until cupcake is rebooted — so power springtrap on first, or reboot cupcake once springtrap is up.
+
+Both APs and the station link are pinned to a fixed WiFi channel (`WIFI_CHANNEL`, default 1 — **must match springtrap's**) so that, when cupcake does join `fazbear_sec`, its shared radio never has to change channels.
 
 Cupcake is **192.168.4.2** in both modes — connect to either network and navigate to **http://192.168.4.2**. `http://cupcake.local` (mDNS) also works, on platforms that support it (not Android browsers).
 

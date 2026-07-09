@@ -2,12 +2,15 @@
   Cupcake Control System
   ESP32 firmware: animated mouth servo, NeoPixel eyes, flickering candle LED.
 
-  Runs its own "Cupcake" WiFi AP (http://192.168.4.2) at all times, and also
-  tries to join the shared "fazbear_sec" network (hosted by the springtrap
-  animatronic) if it's in range -- both interfaces run simultaneously
-  (WIFI_AP_STA). Cupcake is 192.168.4.2 in both modes, so springtrap can
-  always reach it there directly. The web interface is also reachable via
-  http://cupcake.local (mDNS) for convenience on platforms that support it
+  Runs its own "Cupcake" WiFi AP (http://192.168.4.2) at all times. At boot
+  it makes a one-time attempt to also join the shared "fazbear_sec" network
+  (hosted by the springtrap animatronic): if fazbear_sec answers it stays
+  AP+STA and is reachable on both; if not, it shuts the station off and runs
+  AP-only until the next reboot. It never sits there re-scanning for an
+  absent fazbear_sec, because a searching station on the ESP32's single
+  radio destabilizes the SoftAP. Cupcake is 192.168.4.2 in both modes, so
+  springtrap can always reach it there directly. The web interface is also
+  reachable via http://cupcake.local (mDNS) on platforms that support it
   (not Android browsers).
 */
 
@@ -41,14 +44,17 @@ const char* fazbear_password = FAZBEAR_PASSWORD;
 // channel) drops our own AP clients. MUST match springtrap's WIFI_CHANNEL.
 #define WIFI_CHANNEL 1
 
-// STA connection status tracking. Only the connected/not-connected boundary
-// is logged (not every intermediate state flap), so an absent fazbear_sec --
-// which makes the station cycle retry states forever -- stays quiet instead
-// of spamming "not connected". Cosmetic: the web server and the AP work
-// regardless of this state.
-bool          wasConnected    = false;
-unsigned long lastWifiCheckMs = 0;
-#define WIFI_CHECK_MS 5000
+// fazbear_sec is joined (if present) once, at boot, and never re-attempted
+// afterward -- see setup(). The ESP32's single radio can't keep the SoftAP
+// stable while the station is searching for an absent network, so rather
+// than retry forever we make a one-time decision: if fazbear_sec answers
+// within this window we join it and stay AP+STA; if not, we shut the station
+// off entirely and run AP-only until the next reboot. Either way the station
+// never sits there scanning, so the Cupcake AP stays rock-stable.
+//
+// Consequence: if springtrap boots *after* cupcake, cupcake won't see it
+// until cupcake is rebooted. Power springtrap on first (or reboot cupcake).
+#define STA_BOOT_JOIN_TIMEOUT_MS 8000UL
 
 // ---------------------------------------------------------------------------
 // Hardware pins — adjust after physical install
@@ -590,18 +596,40 @@ void setup() {
 
   randomSeed(esp_random());   // hardware RNG -- reliable even with WiFi active
 
-  // Run our own AP and try to join the shared fazbear_sec network at the
-  // same time (WIFI_AP_STA). If fazbear_sec isn't in range, WiFi.begin()
-  // just never connects -- the AP keeps working fine on its own either way.
+  // One-time boot decision (see STA_BOOT_JOIN_TIMEOUT_MS): attempt to join
+  // fazbear_sec once; if it answers, stay AP+STA; if not, drop the station
+  // entirely and run AP-only. Either outcome leaves the station in a stable
+  // state (connected or off) -- never searching -- so the Cupcake AP holds.
   //
   // Cupcake is always 192.168.4.2, in both modes: as our own AP's address
   // (unconventional -- normally the host is .1 -- but these are two
   // separate, unrelated networks, so there's no conflict) and as a static
   // IP on fazbear_sec (springtrap, the AP host there, owns .1). This gives
-  // springtrap a fixed, known address to reach cupcake at without needing
-  // mDNS for that specific link.
+  // springtrap a fixed, known address to reach cupcake at.
   WiFi.mode(WIFI_AP_STA);
+  WiFi.setAutoReconnect(false);   // we make one attempt; no background churn
 
+  // Static IP on the fazbear_sec side (springtrap owns .1 there), and pin the
+  // station probe to WIFI_CHANNEL so it doesn't sweep every channel.
+  WiFi.config(IPAddress(192, 168, 4, 2), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+  WiFi.begin(fazbear_ssid, fazbear_password, WIFI_CHANNEL);
+  Serial.print("Looking for "); Serial.print(fazbear_ssid); Serial.println(" at boot...");
+  unsigned long staStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - staStart < STA_BOOT_JOIN_TIMEOUT_MS) {
+    delay(100);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Joined fazbear_sec, IP: "); Serial.println(WiFi.localIP());
+  } else {
+    // Not found -- shut the station off completely and run AP-only, so it
+    // never sits there scanning and destabilizing our AP. Won't retry until
+    // the next reboot.
+    WiFi.disconnect(true);      // true = also power down the station
+    WiFi.mode(WIFI_AP);
+    Serial.println("fazbear_sec not found -- Cupcake AP only until reboot");
+  }
+
+  // Bring up our own AP in whatever mode we settled on (AP+STA or AP-only).
   IPAddress local_IP(192, 168, 4, 2);
   IPAddress gateway(192, 168, 4, 2);
   IPAddress subnet(255, 255, 255, 0);
@@ -610,15 +638,6 @@ void setup() {
 
   Serial.print("AP started: "); Serial.println(ap_ssid);
   Serial.print("AP IP: ");      Serial.println(WiFi.softAPIP());
-
-  // Static IP on the fazbear_sec side too -- springtrap owns .1 there.
-  WiFi.config(IPAddress(192, 168, 4, 2), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-  // Pass WIFI_CHANNEL so the station only probes that one channel instead of
-  // scanning all of them -- a full scan yanks the shared radio off our AP's
-  // channel and drops AP clients, which is especially bad while fazbear_sec
-  // is absent (springtrap off) and the station would otherwise scan forever.
-  WiFi.begin(fazbear_ssid, fazbear_password, WIFI_CHANNEL);
-  Serial.print("Also attempting to join: "); Serial.println(fazbear_ssid);
 
   if (MDNS.begin(mdns_host)) {
     MDNS.addService("http", "tcp", 80);
@@ -652,24 +671,9 @@ void loop() {
   updateGlitch();
   updateCandle();
 
-  // Log only when we actually cross the fazbear_sec connect/disconnect
-  // boundary -- not every retry-state flap. While springtrap is simply
-  // absent, this stays silent (we start disconnected and never "lost"
-  // anything). Doesn't affect anything else; the control page works the
-  // same whether or not this connects.
-  if (millis() - lastWifiCheckMs >= WIFI_CHECK_MS) {
-    lastWifiCheckMs = millis();
-    bool connected = (WiFi.status() == WL_CONNECTED);
-    if (connected != wasConnected) {
-      wasConnected = connected;
-      if (connected) {
-        Serial.print("Joined fazbear_sec, IP: ");
-        Serial.println(WiFi.localIP());
-      } else {
-        Serial.println("Lost fazbear_sec (still reachable on the Cupcake AP)");
-      }
-    }
-  }
+  // No WiFi work here: the fazbear_sec join is a one-time boot decision (see
+  // setup()), so the station is either cleanly connected or fully off and
+  // never touched again until reboot -- nothing to poll or retry.
 
   delay(2);
 }
