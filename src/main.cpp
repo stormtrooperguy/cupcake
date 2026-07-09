@@ -33,6 +33,14 @@ const char* mdns_host   = "cupcake";        // reachable at http://cupcake.local
 const char* fazbear_ssid     = "fazbear_sec";
 const char* fazbear_password = FAZBEAR_PASSWORD;
 
+// Fixed WiFi channel shared by every device on this rig. The ESP32 has one
+// radio, so in AP+STA mode the SoftAP and station must live on the same
+// channel. Pinning our AP, springtrap's AP (fazbear_sec), and our station's
+// probe to this one channel keeps the radio from ever hopping off it --
+// otherwise the station's scanning (or connecting to an AP on a different
+// channel) drops our own AP clients. MUST match springtrap's WIFI_CHANNEL.
+#define WIFI_CHANNEL 1
+
 // STA connection status tracking, serial-logged on change only. Cosmetic --
 // the web server listens on all interfaces regardless of this state.
 wl_status_t   lastWifiStatus  = WL_IDLE_STATUS;
@@ -595,14 +603,18 @@ void setup() {
   IPAddress gateway(192, 168, 4, 2);
   IPAddress subnet(255, 255, 255, 0);
   WiFi.softAPConfig(local_IP, gateway, subnet);
-  WiFi.softAP(ap_ssid, ap_password);
+  WiFi.softAP(ap_ssid, ap_password, WIFI_CHANNEL);
 
   Serial.print("AP started: "); Serial.println(ap_ssid);
   Serial.print("AP IP: ");      Serial.println(WiFi.softAPIP());
 
   // Static IP on the fazbear_sec side too -- springtrap owns .1 there.
   WiFi.config(IPAddress(192, 168, 4, 2), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-  WiFi.begin(fazbear_ssid, fazbear_password);
+  // Pass WIFI_CHANNEL so the station only probes that one channel instead of
+  // scanning all of them -- a full scan yanks the shared radio off our AP's
+  // channel and drops AP clients, which is especially bad while fazbear_sec
+  // is absent (springtrap off) and the station would otherwise scan forever.
+  WiFi.begin(fazbear_ssid, fazbear_password, WIFI_CHANNEL);
   Serial.print("Also attempting to join: "); Serial.println(fazbear_ssid);
 
   if (MDNS.begin(mdns_host)) {

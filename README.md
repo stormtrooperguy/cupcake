@@ -32,6 +32,8 @@ The servo and LEDs are powered externally (5 V). All grounds must be common.
 
 Cupcake runs its own `Cupcake` WiFi access point at all times, and also tries to join the shared `fazbear_sec` network (hosted by the springtrap animatronic) if it's in range — both run simultaneously (`WIFI_AP_STA`). If `fazbear_sec` isn't reachable, cupcake just keeps working on its own AP.
 
+Because the ESP32 has a single radio, AP+STA coexistence requires the SoftAP and the station to share one WiFi channel. Cupcake's AP, its station link to `fazbear_sec`, and springtrap's `fazbear_sec` AP are all pinned to a fixed channel (`WIFI_CHANNEL`, default 1 — **must match springtrap's**). Without this, the station's channel scanning drops the AP intermittently (cupcake's AP appears then keeps disconnecting), and the station only ever probes that one channel so an absent `fazbear_sec` doesn't destabilize the AP.
+
 Cupcake is **192.168.4.2** in both modes — connect to either network and navigate to **http://192.168.4.2**. `http://cupcake.local` (mDNS) also works, on platforms that support it (not Android browsers).
 
 Passwords are defined in `src/secrets.h` (gitignored). Copy `src/secrets.h.example` to `src/secrets.h` and set your own values before building:
