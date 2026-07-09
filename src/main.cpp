@@ -41,9 +41,12 @@ const char* fazbear_password = FAZBEAR_PASSWORD;
 // channel) drops our own AP clients. MUST match springtrap's WIFI_CHANNEL.
 #define WIFI_CHANNEL 1
 
-// STA connection status tracking, serial-logged on change only. Cosmetic --
-// the web server listens on all interfaces regardless of this state.
-wl_status_t   lastWifiStatus  = WL_IDLE_STATUS;
+// STA connection status tracking. Only the connected/not-connected boundary
+// is logged (not every intermediate state flap), so an absent fazbear_sec --
+// which makes the station cycle retry states forever -- stays quiet instead
+// of spamming "not connected". Cosmetic: the web server and the AP work
+// regardless of this state.
+bool          wasConnected    = false;
 unsigned long lastWifiCheckMs = 0;
 #define WIFI_CHECK_MS 5000
 
@@ -649,18 +652,21 @@ void loop() {
   updateGlitch();
   updateCandle();
 
-  // Log fazbear_sec join/drop transitions -- doesn't affect anything else,
-  // the control page works the same whether or not this connects.
+  // Log only when we actually cross the fazbear_sec connect/disconnect
+  // boundary -- not every retry-state flap. While springtrap is simply
+  // absent, this stays silent (we start disconnected and never "lost"
+  // anything). Doesn't affect anything else; the control page works the
+  // same whether or not this connects.
   if (millis() - lastWifiCheckMs >= WIFI_CHECK_MS) {
     lastWifiCheckMs = millis();
-    wl_status_t st = WiFi.status();
-    if (st != lastWifiStatus) {
-      lastWifiStatus = st;
-      if (st == WL_CONNECTED) {
+    bool connected = (WiFi.status() == WL_CONNECTED);
+    if (connected != wasConnected) {
+      wasConnected = connected;
+      if (connected) {
         Serial.print("Joined fazbear_sec, IP: ");
         Serial.println(WiFi.localIP());
       } else {
-        Serial.println("Not connected to fazbear_sec (still reachable via Cupcake AP / cupcake.local)");
+        Serial.println("Lost fazbear_sec (still reachable on the Cupcake AP)");
       }
     }
   }
