@@ -74,6 +74,7 @@ const char* fazbear_password = FAZBEAR_PASSWORD;
 #define BITE_CLOSE_MS         120   // pause after closing before flicker-out begins
 #define BITE_FLICKER_HALF_MS   60   // duration of each on/off half-cycle during eye flicker
 #define BITE_FLICKER_COUNT      3   // number of half-cycle transitions (odd = ends on target color)
+#define MULTI_BITE_MS        8000   // "bite_multi" keeps re-chomping for ~this long (matches springtrap's error phase)
 
 // ---------------------------------------------------------------------------
 // Eye brightness (0–255)
@@ -109,6 +110,12 @@ enum BiteState { BITE_IDLE, BITE_FLICKER_IN, BITE_OPENING, BITE_CLOSING, BITE_FL
 BiteState     biteState   = BITE_IDLE;
 unsigned long biteStepMs  = 0;
 int           flickerStep = 0;
+
+// Multi-bite: when true, a completed bite immediately starts another until
+// multiBiteUntilMs, so cupcake chomps repeatedly for the whole window
+// instead of a single snap. See triggerMultiBite() / the "bite_multi" action.
+bool          multiBite        = false;
+unsigned long multiBiteUntilMs = 0;
 
 // ---------------------------------------------------------------------------
 // Candle state
@@ -237,11 +244,20 @@ void updateBite() {
     if (now - biteStepMs >= BITE_FLICKER_HALF_MS) {
       flickerStep++;
       if (flickerStep >= BITE_FLICKER_COUNT) {
-        eyesRed = false;
-        applyEyes();
-        FastLED.show();
-        biteState = BITE_IDLE;
-        pushStatus();
+        if (multiBite && (long)(multiBiteUntilMs - now) > 0) {
+          // Still within the multi-bite window -- immediately chomp again.
+          eyesRed     = false;
+          flickerStep = 0;
+          biteState   = BITE_FLICKER_IN;
+          biteStepMs  = now;
+        } else {
+          multiBite = false;
+          eyesRed   = false;
+          applyEyes();
+          FastLED.show();
+          biteState = BITE_IDLE;
+          pushStatus();
+        }
       } else {
         eyesRed = !eyesRed;
         applyEyes();
@@ -260,6 +276,14 @@ void triggerBite() {
   biteStepMs  = millis();
   // Reset glitch so it starts fresh after the bite completes
   glitchStep = 0;
+}
+
+// Repeated chomp: keeps re-biting until MULTI_BITE_MS elapses. Works whether
+// a bite is already running (it just extends into multi mode) or idle.
+void triggerMultiBite() {
+  multiBite        = true;
+  multiBiteUntilMs = millis() + MULTI_BITE_MS;
+  triggerBite();   // start the first chomp if idle; no-op if one's in progress
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +391,11 @@ static bool isLightColor(const CRGB &c) {
 void dispatchAction(const char* path) {
   if (strcmp(path, "bite") == 0) {
     triggerBite();
+    pushStatus();
+    return;
+  }
+  if (strcmp(path, "bite_multi") == 0) {
+    triggerMultiBite();
     pushStatus();
     return;
   }
