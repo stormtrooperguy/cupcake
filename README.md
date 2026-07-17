@@ -46,17 +46,18 @@ Passwords are defined in `src/secrets.h` (gitignored). Copy `src/secrets.h.examp
 | Control | What it does |
 |---|---|
 | **CHOMP** | Eyes flicker to red, mouth opens then snaps closed, eyes flicker back to resting color |
+| **MULTI CHOMP** | Eyes go red and the jaw chomps repeatedly for ~8 seconds, then the eyes return to their previous color |
 | **Candle** toggle | Turns the candle LED on/off (defaults to on) |
 | **Glitch** toggle | Enables glitch mode: eyes occasionally malfunction, flickering off or red on one or both eyes |
 | **yellow / red / blue / green / purple / off** | Sets the resting eye color |
 | **mouth open / mouth close** | Moves the servo to the open or closed position for calibration |
 
-Beyond the UI buttons, every action is reachable over HTTP as `GET /a/<action>` (e.g. `/a/bite`, `/a/eye_red`). One action has no button and is meant for remote drivers like springtrap: **`/a/bite_multi`** repeatedly chomps for ~8 seconds (`MULTI_BITE_MS`) instead of a single snap — springtrap fires this during its error phase so cupcake's jaw flaps for the whole sequence alongside it.
+Every action is also reachable over HTTP as `GET /a/<action>` (e.g. `/a/bite`, `/a/bite_multi`, `/a/eye_red`) — this is how springtrap drives cupcake during its error phase.
 
 ## Behavior
 
 - **Eyes** default to yellow at startup. During a chomp they flicker to red, then flicker back to the resting color when the snap completes.
-- **`bite_multi`** repeats the chomp back-to-back until `MULTI_BITE_MS` elapses. When the resting eye color is red (e.g. springtrap sent `eye_red` first), the per-chomp flicker is invisible so the eyes simply hold red while the jaw flaps.
+- **`bite_multi` (MULTI CHOMP)** turns the eyes red, repeats the chomp back-to-back until `MULTI_BITE_MS` (~8s) elapses, then restores whatever eye color was set before it started. Because the eyes are red for the duration, the per-chomp flicker is invisible and they simply hold red while the jaw flaps. It manages its own eye color, so a remote caller (springtrap) only needs the one `bite_multi` call.
 - **Candle** flickers all 7 pixels through independent random orange/yellow/red values at 30–120 ms intervals when enabled, creating an organic flame effect. On by default.
 - **Glitch** mode intermittently malfunctions one or both eyes, snapping to black or red for 1–3 rapid flicker cycles, then recovering. Events occur every 1.5–9 seconds. Suspends automatically during a chomp.
 - **Chomp** is non-blocking: the mouth snaps open (`BITE_OPEN_MS`) then closes (`BITE_CLOSE_MS`) while the web server keeps responding.

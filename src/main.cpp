@@ -113,9 +113,14 @@ int           flickerStep = 0;
 
 // Multi-bite: when true, a completed bite immediately starts another until
 // multiBiteUntilMs, so cupcake chomps repeatedly for the whole window
-// instead of a single snap. See triggerMultiBite() / the "bite_multi" action.
+// instead of a single snap. It also forces the eyes red for the duration and
+// restores the prior color when it ends -- see triggerMultiBite() / the
+// "bite_multi" action. savedEye* hold the pre-multi-bite eye color so it can
+// be put back.
 bool          multiBite        = false;
 unsigned long multiBiteUntilMs = 0;
+CRGB          savedEyeColor    = CRGB::Yellow;
+const char*   savedEyePath     = "eye_yellow";
 
 // ---------------------------------------------------------------------------
 // Candle state
@@ -251,6 +256,11 @@ void updateBite() {
           biteState   = BITE_FLICKER_IN;
           biteStepMs  = now;
         } else {
+          if (multiBite) {
+            // Multi-bite window done -- restore the eye color it had before.
+            eyeNormalColor = savedEyeColor;
+            currentEyePath = savedEyePath;
+          }
           multiBite = false;
           eyesRed   = false;
           applyEyes();
@@ -278,11 +288,25 @@ void triggerBite() {
   glitchStep = 0;
 }
 
-// Repeated chomp: keeps re-biting until MULTI_BITE_MS elapses. Works whether
-// a bite is already running (it just extends into multi mode) or idle.
+// Repeated chomp: forces the eyes red and keeps re-biting until MULTI_BITE_MS
+// elapses, then restores the pre-existing eye color. Works whether a bite is
+// already running (it just extends into multi mode) or idle.
 void triggerMultiBite() {
+  // Remember the current eye color only on first entry, so a re-trigger
+  // mid-window doesn't save red as the "previous" color.
+  if (!multiBite) {
+    savedEyeColor = eyeNormalColor;
+    savedEyePath  = currentEyePath;
+  }
   multiBite        = true;
   multiBiteUntilMs = millis() + MULTI_BITE_MS;
+  // Go red immediately for the duration; the per-chomp flicker is then
+  // invisible (red<->red) so the eyes simply hold red while the jaw flaps.
+  eyeNormalColor = CRGB::Red;
+  currentEyePath = "eye_red";
+  eyesRed        = false;
+  applyEyes();
+  FastLED.show();
   triggerBite();   // start the first chomp if idle; no-op if one's in progress
 }
 
@@ -451,12 +475,13 @@ void buildPageHtml(String &out) {
         "h1 { text-align:center; margin-bottom:15px; font-size:24px; }"
         "h2 { text-align:center; margin:15px 0 8px; font-size:17px; color:#aaa; }"
         // Chomp button — large circle, centred
-        ".chomp-wrap { max-width:800px; margin:0 auto 15px; display:flex; justify-content:center; }"
+        ".chomp-wrap { max-width:800px; margin:0 auto 15px; display:flex; justify-content:center; gap:18px; flex-wrap:wrap; }"
         ".btn-chomp { width:200px; height:200px; border:none; border-radius:50%; background:#c0392b;"
         "color:#fff; font-family:inherit; font-size:26px; font-weight:bold; cursor:pointer;"
-        "transition:all .2s; box-shadow:0 4px 8px rgba(0,0,0,.4); }"
+        "transition:all .2s; box-shadow:0 4px 8px rgba(0,0,0,.4); line-height:1.1; }"
         ".btn-chomp:hover { transform:translateY(-2px); box-shadow:0 6px 12px rgba(0,0,0,.5); opacity:.9; }"
         ".btn-chomp:active { transform:translateY(0); box-shadow:0 2px 4px rgba(0,0,0,.3); }"
+        ".btn-multi { background:#7d1f16; }"
         // Round button grid — like duckling
         ".button-grid { display:grid; grid-template-columns:repeat(auto-fit,88px);"
         "gap:10px; max-width:800px; margin:0 auto 15px; justify-content:center; }"
@@ -493,9 +518,10 @@ void buildPageHtml(String &out) {
         "</style></head>"
         "<body><h1>&#127874; Cupcake</h1>";
 
-  // Chomp button — full-width on its own row
+  // Action buttons — single chomp and the ~8s repeating multi-chomp
   out += "<h2>Actions</h2><div class=\"chomp-wrap\">"
          "<button class=\"btn-chomp\" data-path=\"bite\" onclick=\"t('bite')\">CHOMP</button>"
+         "<button class=\"btn-chomp btn-multi\" data-path=\"bite_multi\" onclick=\"t('bite_multi')\">MULTI<br>CHOMP</button>"
          "</div>";
 
   // Toggles section
